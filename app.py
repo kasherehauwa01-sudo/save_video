@@ -63,15 +63,30 @@ def download_hls_playlist(playlist_url: str) -> Optional[bytes]:
 # Функция для анализа ссылки и поиска доступных форматов
 def inspect_url(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
     """Изучает ссылку и возвращает список вариантов скачивания."""
-    response = requests.get(url, timeout=30)
-    if response.status_code != 200:
+    head_response = requests.head(url, allow_redirects=True, timeout=30)
+    if head_response.status_code not in (200, 206, 405):
         return [], "Не удалось открыть ссылку: сервер вернул неуспешный статус."
 
-    content_type = response.headers.get("Content-Type", "").lower()
+    if head_response.status_code == 405:
+        head_response = requests.get(url, stream=True, timeout=30)
+        if head_response.status_code != 200:
+            return [], "Не удалось открыть ссылку: сервер вернул неуспешный статус."
+
+    content_type = head_response.headers.get("Content-Type", "").lower()
+    if "text/html" in content_type:
+        return (
+            [],
+            "Ссылка ведет на HTML-страницу. Нужна прямая ссылка на видео или плейлист.",
+        )
+
     is_m3u8 = "mpegurl" in content_type or url.lower().endswith(".m3u8")
 
     if is_m3u8:
-        lines = response.text.splitlines()
+        playlist_response = requests.get(url, timeout=30)
+        if playlist_response.status_code != 200:
+            return [], "Не удалось открыть плейлист: сервер вернул неуспешный статус."
+
+        lines = playlist_response.text.splitlines()
         options = []
         for index, line in enumerate(lines):
             if line.startswith("#EXT-X-STREAM-INF"):
