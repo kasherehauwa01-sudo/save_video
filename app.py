@@ -28,9 +28,6 @@ st.title("Скачивание видео по ссылке")
 # Поле для ввода URL
 url = st.text_input("Введите URL видео")
 
-# Поле для ввода имени файла (необязательно)
-file_name_input = st.text_input("Имя файла (без расширения, необязательно)")
-
 # Выбор расширения файла
 extension = st.selectbox("Выберите расширение файла", ["mp4", "mov", "avi", "mkv"])
 
@@ -49,13 +46,10 @@ if st.button("Скачать видео"):
             if data is None:
                 st.error("Не удалось скачать файл: сервер вернул неуспешный статус.")
             else:
-                # Определяем имя файла
-                if file_name_input.strip():
-                    base_name = file_name_input.strip()
-                else:
-                    parsed_url = urlparse(url)
-                    path_part = os.path.basename(parsed_url.path)
-                    base_name = os.path.splitext(path_part)[0] or "video"
+                # Определяем имя файла на основе URL
+                parsed_url = urlparse(url)
+                path_part = os.path.basename(parsed_url.path)
+                base_name = os.path.splitext(path_part)[0] or "video"
 
                 file_name = f"{base_name}.{extension}"
 
@@ -65,12 +59,21 @@ if st.button("Скачать видео"):
                     f"Файл загружен. Примерный размер: {size_mb:.2f} МБ."
                 )
 
+                # Подбираем MIME-тип по расширению
+                mime_map = {
+                    "mp4": "video/mp4",
+                    "mov": "video/quicktime",
+                    "avi": "video/x-msvideo",
+                    "mkv": "video/x-matroska",
+                }
+                mime_type = mime_map.get(extension, "video/mp4")
+
                 # Кнопка скачивания
                 st.download_button(
                     label="Скачать файл",
                     data=data,
                     file_name=file_name,
-                    mime="video/mp4",
+                    mime=mime_type,
                 )
         except requests.RequestException as exc:
             st.error(f"Ошибка при загрузке файла: {exc}")
