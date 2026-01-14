@@ -203,28 +203,47 @@ def inspect_url(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
 # Заголовок страницы
 st.title("Скачивание видео по ссылке")
 
+# Инициализация логов
+if "logs" not in st.session_state:
+    st.session_state["logs"] = []
+
+
+# Функция для добавления сообщений в лог
+def add_log(message: str) -> None:
+    """Добавляет сообщение в лог для отображения в интерфейсе."""
+    st.session_state["logs"].append(message)
+
+
 # Поле для ввода URL
 url = st.text_input("Введите URL видео")
 
 # Кнопка для проверки доступных форматов
 if st.button("Проверить ссылку"):
     if not url:
+        add_log("Проверка ссылки: URL пустой.")
         st.error("URL не должен быть пустым.")
     elif not (url.startswith("http://") or url.startswith("https://")):
+        add_log("Проверка ссылки: неверный протокол.")
         st.warning("URL должен начинаться с http:// или https://")
     else:
         try:
+            add_log("Проверка ссылки: начинаем анализ URL.")
             options, error_message = inspect_url(url)
             if error_message:
+                add_log(f"Проверка ссылки: ошибка - {error_message}")
                 st.error(error_message)
             elif not options:
+                add_log("Проверка ссылки: варианты не найдены.")
                 st.error("Не удалось определить доступные форматы.")
             else:
                 st.session_state["download_options"] = options
+                add_log(f"Проверка ссылки: найдено вариантов - {len(options)}.")
                 st.success("Форматы определены. Выберите подходящий вариант.")
         except requests.RequestException as exc:
+            add_log(f"Проверка ссылки: ошибка запроса - {exc}")
             st.error(f"Ошибка при проверке ссылки: {exc}")
         except Exception as exc:  # noqa: BLE001
+            add_log(f"Проверка ссылки: непредвиденная ошибка - {exc}")
             st.error(f"Непредвиденная ошибка: {exc}")
 
 # Выпадающий список с доступными форматами
@@ -241,13 +260,16 @@ else:
 if st.button("Скачать видео"):
     # Проверка на пустой URL
     if not url:
+        add_log("Скачивание: URL пустой.")
         st.error("URL не должен быть пустым.")
     # Простая проверка на корректный протокол
     elif not (url.startswith("http://") or url.startswith("https://")):
+        add_log("Скачивание: неверный протокол URL.")
         st.warning("URL должен начинаться с http:// или https://")
     else:
         try:
             if not options:
+                add_log("Скачивание: форматы не выбраны.")
                 st.warning("Сначала нажмите «Проверить ссылку», чтобы выбрать формат.")
             else:
                 selected_option = next(
@@ -255,18 +277,24 @@ if st.button("Скачать видео"):
                     None,
                 )
                 if not selected_option:
+                    add_log("Скачивание: выбранный формат не найден.")
                     st.error("Не удалось определить выбранный формат.")
                     st.stop()
 
                 # Пытаемся скачать файл
+                add_log(
+                    f"Скачивание: выбран формат {selected_option['label']}."
+                )
                 if selected_option["type"] == "hls":
                     data = download_hls_playlist(selected_option["url"])
                 else:
                     data = download_file(selected_option["url"])
 
                 if data is None:
+                    add_log("Скачивание: сервер вернул неуспешный статус.")
                     st.error("Не удалось скачать файл: сервер вернул неуспешный статус.")
                 elif data.lstrip().lower().startswith((b"<!doctype html", b"<html")):
+                    add_log("Скачивание: получена HTML-страница вместо видео.")
                     st.error(
                         "Ссылка вернула HTML-страницу, а не видео. "
                         "Проверьте прямую ссылку на файл."
@@ -283,6 +311,9 @@ if st.button("Скачать видео"):
 
                     # Рассчитываем размер в мегабайтах
                     size_mb = len(data) / (1024 * 1024)
+                    add_log(
+                        f"Скачивание: файл загружен, размер {size_mb:.2f} МБ."
+                    )
                     st.success(
                         f"Файл загружен. Примерный размер: {size_mb:.2f} МБ."
                     )
@@ -295,6 +326,15 @@ if st.button("Скачать видео"):
                         mime=selected_option["mime"],
                     )
         except requests.RequestException as exc:
+            add_log(f"Скачивание: ошибка запроса - {exc}")
             st.error(f"Ошибка при загрузке файла: {exc}")
         except Exception as exc:  # noqa: BLE001
+            add_log(f"Скачивание: непредвиденная ошибка - {exc}")
             st.error(f"Непредвиденная ошибка: {exc}")
+
+# Блок вывода логов
+st.subheader("Логи")
+if st.session_state["logs"]:
+    st.text("\n".join(st.session_state["logs"]))
+else:
+    st.caption("Логи пока пустые.")
