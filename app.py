@@ -1,5 +1,6 @@
 import os
 from io import BytesIO
+import re
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
@@ -60,6 +61,52 @@ def download_hls_playlist(playlist_url: str) -> Optional[bytes]:
     return buffer.getvalue()
 
 
+# Функция для поиска ссылок на видео в HTML-странице
+def extract_video_links(html: str, base_url: str) -> list[dict[str, str]]:
+    """Ищет ссылки на видео в HTML и возвращает список вариантов."""
+    candidates: set[str] = set()
+
+    # Ищем теги <video src="..."> и <source src="...">
+    for match in re.findall(r"""(?:video|source)[^>]+src=["']([^"']+)["']""", html):
+        candidates.add(urljoin(base_url, match))
+
+    # Ищем прямые ссылки в <a href="...">
+    for match in re.findall(r"""<a[^>]+href=["']([^"']+)["']""", html):
+        candidates.add(urljoin(base_url, match))
+
+    # Отбираем ссылки по расширениям
+    allowed_ext = {"mp4", "mov", "avi", "mkv", "m3u8", "ts"}
+    options: list[dict[str, str]] = []
+    for link in sorted(candidates):
+        parsed = urlparse(link)
+        ext = os.path.splitext(parsed.path)[1].lstrip(".").lower()
+        if ext in allowed_ext:
+            if ext == "m3u8":
+                label = "HLS (m3u8)"
+                options.append(
+                    {
+                        "label": label,
+                        "url": link,
+                        "extension": "ts",
+                        "mime": MIME_MAP["ts"],
+                        "type": "hls",
+                    }
+                )
+            else:
+                label = f"Видео ({ext})"
+                options.append(
+                    {
+                        "label": label,
+                        "url": link,
+                        "extension": ext,
+                        "mime": MIME_MAP.get(ext, "video/mp4"),
+                        "type": "direct",
+                    }
+                )
+
+    return options
+
+
 # Функция для анализа ссылки и поиска доступных форматов
 def inspect_url(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
     """Изучает ссылку и возвращает список вариантов скачивания."""
@@ -74,10 +121,21 @@ def inspect_url(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
 
     content_type = head_response.headers.get("Content-Type", "").lower()
     if "text/html" in content_type:
-        return (
-            [],
-            "Ссылка ведет на HTML-страницу. Нужна прямая ссылка на видео или плейлист.",
-        )
+        page_response = requests.get(url, timeout=30)
+        if page_response.status_code != 200:
+            return (
+                [],
+                "Ссылка ведет на HTML-страницу, но страницу не удалось открыть.",
+            )
+
+        options = extract_video_links(page_response.text, url)
+        if not options:
+            return (
+                [],
+                "На странице не найдено прямых ссылок на видео или плейлист.",
+            )
+
+        return options, None
 
     is_m3u8 = "mpegurl" in content_type or url.lower().endswith(".m3u8")
 
