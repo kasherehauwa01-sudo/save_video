@@ -1,6 +1,8 @@
 import os
 from io import BytesIO
+import importlib.util
 import re
+import tempfile
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
@@ -107,6 +109,81 @@ def extract_video_links(html: str, base_url: str) -> list[dict[str, str]]:
     return options
 
 
+# Функция для получения доступных форматов через yt-dlp
+def get_ytdlp_options(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
+    """Получает список форматов через yt-dlp, если он установлен."""
+    if importlib.util.find_spec("yt_dlp") is None:
+        return [], "yt-dlp не установлен. Установите пакет для использования режима."
+
+    import yt_dlp
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    formats = info.get("formats", [])
+    options: list[dict[str, str]] = []
+    for fmt in formats:
+        if fmt.get("vcodec") != "none" and fmt.get("acodec") != "none":
+            resolution = fmt.get("resolution") or fmt.get("format_note") or "неизвестно"
+            label = f"{fmt.get('format_id')} | {fmt.get('ext')} | {resolution}"
+            options.append(
+                {
+                    "label": label,
+                    "url": url,
+                    "extension": fmt.get("ext") or "mp4",
+                    "mime": MIME_MAP.get(fmt.get("ext") or "mp4", "video/mp4"),
+                    "type": "ytdlp",
+                    "format_id": fmt.get("format_id"),
+                }
+            )
+
+    if not options:
+        return (
+            [],
+            "yt-dlp не нашел форматы с видео и аудио в одном файле. "
+            "Для объединения потоков обычно нужен ffmpeg.",
+        )
+
+    return options, None
+
+
+# Функция для скачивания через yt-dlp
+def download_with_ytdlp(url: str, format_id: str) -> tuple[Optional[bytes], Optional[str]]:
+    """Скачивает файл через yt-dlp и возвращает байты и имя файла."""
+    if importlib.util.find_spec("yt_dlp") is None:
+        return None, None
+
+    import yt_dlp
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_template = os.path.join(tmpdir, "%(title)s.%(ext)s")
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "outtmpl": output_template,
+            "format": format_id,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            file_path = ydl.prepare_filename(info)
+
+        if not os.path.exists(file_path):
+            files = os.listdir(tmpdir)
+            if not files:
+                return None, None
+            file_path = os.path.join(tmpdir, files[0])
+
+        with open(file_path, "rb") as downloaded_file:
+            data = downloaded_file.read()
+
+        return data, os.path.basename(file_path)
+
+
 # Функция для анализа ссылки и поиска доступных форматов
 def inspect_url(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
     """Изучает ссылку и возвращает список вариантов скачивания."""
@@ -132,7 +209,9 @@ def inspect_url(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
         if not options:
             return (
                 [],
-                "На странице не найдено прямых ссылок на видео или плейлист.",
+                "На странице не найдено прямых ссылок на видео или плейлист. "
+                "Такое бывает, если видео подгружается скриптами, "
+                "используется blob: URL или требуется авторизация.",
             )
 
         return options, None
@@ -217,6 +296,9 @@ def add_log(message: str) -> None:
 # Поле для ввода URL
 url = st.text_input("Введите URL видео")
 
+# Опциональный режим для yt-dlp
+use_ytdlp = st.checkbox("Использовать yt-dlp (YouTube и сложные сайты)")
+
 # Кнопка для проверки доступных форматов
 if st.button("Проверить ссылку"):
     if not url:
@@ -228,7 +310,11 @@ if st.button("Проверить ссылку"):
     else:
         try:
             add_log("Проверка ссылки: начинаем анализ URL.")
-            options, error_message = inspect_url(url)
+            if use_ytdlp:
+                add_log("Проверка ссылки: используем yt-dlp.")
+                options, error_message = get_ytdlp_options(url)
+            else:
+                options, error_message = inspect_url(url)
             if error_message:
                 add_log(f"Проверка ссылки: ошибка - {error_message}")
                 st.error(error_message)
@@ -285,10 +371,21 @@ if st.button("Скачать видео"):
                 add_log(
                     f"Скачивание: выбран формат {selected_option['label']}."
                 )
-                if selected_option["type"] == "hls":
+                if selected_option["type"] == "ytdlp":
+                    data, ytdlp_name = download_with_ytdlp(
+                        selected_option["url"],
+                        selected_option.get("format_id", "best"),
+                    )
+                    if ytdlp_name:
+                        base_name = os.path.splitext(ytdlp_name)[0] or "video"
+                    else:
+                        base_name = "video"
+                elif selected_option["type"] == "hls":
                     data = download_hls_playlist(selected_option["url"])
+                    base_name = None
                 else:
                     data = download_file(selected_option["url"])
+                    base_name = None
 
                 if data is None:
                     add_log("Скачивание: сервер вернул неуспешный статус.")
@@ -301,9 +398,10 @@ if st.button("Скачать видео"):
                     )
                 else:
                     # Определяем имя файла на основе URL
-                    parsed_url = urlparse(url)
-                    path_part = os.path.basename(parsed_url.path)
-                    base_name = os.path.splitext(path_part)[0] or "video"
+                    if not base_name:
+                        parsed_url = urlparse(url)
+                        path_part = os.path.basename(parsed_url.path)
+                        base_name = os.path.splitext(path_part)[0] or "video"
 
                     file_name = (
                         f"{base_name}.{selected_option['extension']}"
