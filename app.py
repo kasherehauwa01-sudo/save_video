@@ -102,6 +102,7 @@ def extract_video_links(html: str, base_url: str) -> list[dict[str, str]]:
                         "extension": "ts",
                         "mime": MIME_MAP["ts"],
                         "type": "hls",
+                        "resolution": "неизвестно",
                     }
                 )
             else:
@@ -113,6 +114,7 @@ def extract_video_links(html: str, base_url: str) -> list[dict[str, str]]:
                         "extension": ext,
                         "mime": MIME_MAP.get(ext, "video/mp4"),
                         "type": "direct",
+                        "resolution": None,
                     }
                 )
 
@@ -175,6 +177,25 @@ def get_ytdlp_options(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
         )
 
     return options, None
+
+
+# Функция для сортировки вариантов по разрешению (от лучшего к худшему)
+def sort_options_by_resolution(options: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Сортирует варианты по высоте разрешения в убывающем порядке."""
+
+    def extract_height(resolution: Optional[str]) -> int:
+        if not resolution:
+            return 0
+        match = re.search(r"x(\\d+)", str(resolution))
+        if match:
+            return int(match.group(1))
+        return 0
+
+    return sorted(
+        options,
+        key=lambda option: extract_height(option.get("resolution")),
+        reverse=True,
+    )
 
 
 # Функция для скачивания через yt-dlp
@@ -275,11 +296,12 @@ def inspect_url(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
                             "extension": "ts",
                             "mime": MIME_MAP["ts"],
                             "type": "hls",
+                            "resolution": resolution,
                         }
                     )
 
         if options:
-            return options, None
+            return sort_options_by_resolution(options), None
 
         return (
             [
@@ -289,6 +311,7 @@ def inspect_url(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
                     "extension": "ts",
                     "mime": MIME_MAP["ts"],
                     "type": "hls",
+                    "resolution": "неизвестно",
                 }
             ],
             None,
@@ -307,6 +330,7 @@ def inspect_url(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
                 "extension": extension,
                 "mime": mime_type,
                 "type": "direct",
+                "resolution": None,
             }
         ],
         None,
@@ -363,7 +387,7 @@ if url and url != st.session_state.get("last_checked_url"):
                 st.error("Не удалось определить доступные форматы.")
                 st.session_state.pop("download_options", None)
             else:
-                st.session_state["download_options"] = options
+                st.session_state["download_options"] = sort_options_by_resolution(options)
                 add_log(f"Проверка ссылки: найдено вариантов - {len(options)}.")
                 st.success("Форматы определены. Выберите подходящий вариант.")
                 st.session_state["last_checked_url"] = url
