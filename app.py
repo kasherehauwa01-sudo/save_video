@@ -127,6 +127,15 @@ def get_ytdlp_options(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
 
     import yt_dlp
 
+    def extract_height(resolution: Optional[str]) -> int:
+        """Извлекает высоту из строки разрешения формата."""
+        if not resolution:
+            return 0
+        match = re.search(r"x(\\d+)", resolution)
+        if match:
+            return int(match.group(1))
+        return 0
+
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -149,8 +158,14 @@ def get_ytdlp_options(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
                     "mime": MIME_MAP.get(fmt.get("ext") or "mp4", "video/mp4"),
                     "type": "ytdlp",
                     "format_id": fmt.get("format_id"),
+                    "resolution": resolution,
                 }
             )
+
+    options.sort(
+        key=lambda option: extract_height(option.get("resolution")),
+        reverse=True,
+    )
 
     if not options:
         return (
@@ -422,10 +437,11 @@ if st.button("Скачать видео"):
                     base_name = None
 
                 if data is None:
-                    add_log("Скачивание: сервер вернул неуспешный статус.")
                     if selected_option["type"] == "ytdlp":
+                        add_log("Скачивание: yt-dlp вернул ошибку или пустой файл.")
                         st.error("Не удалось скачать файл через yt-dlp.")
                     else:
+                        add_log("Скачивание: сервер вернул неуспешный статус.")
                         st.error(
                             "Не удалось скачать файл: сервер вернул неуспешный статус."
                         )
