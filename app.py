@@ -21,7 +21,7 @@ MIME_MAP = {
 
 
 # Функция для загрузки файла по URL
-def download_file(url: str) -> Optional[bytes]:
+def download_file(url: str, progress_callback: Optional[callable] = None) -> Optional[bytes]:
     """Скачивает файл по прямой ссылке и возвращает байты."""
     response = requests.get(url, stream=True, timeout=30)
     if response.status_code != 200:
@@ -29,14 +29,21 @@ def download_file(url: str) -> Optional[bytes]:
 
     # Собираем содержимое в память
     buffer = BytesIO()
+    total_size = int(response.headers.get("Content-Length", 0))
+    downloaded_size = 0
     for chunk in response.iter_content(chunk_size=1024 * 1024):
         if chunk:
             buffer.write(chunk)
+            downloaded_size += len(chunk)
+            if progress_callback and total_size:
+                progress_callback(min(downloaded_size / total_size, 1.0))
     return buffer.getvalue()
 
 
 # Функция для загрузки HLS-плейлиста (m3u8)
-def download_hls_playlist(playlist_url: str) -> Optional[bytes]:
+def download_hls_playlist(
+    playlist_url: str, progress_callback: Optional[callable] = None
+) -> Optional[bytes]:
     """Скачивает HLS-плейлист и склеивает сегменты в один файл."""
     response = requests.get(playlist_url, timeout=30)
     if response.status_code != 200:
@@ -53,13 +60,16 @@ def download_hls_playlist(playlist_url: str) -> Optional[bytes]:
         return None
 
     buffer = BytesIO()
-    for segment_url in segment_urls:
+    total_segments = len(segment_urls)
+    for index, segment_url in enumerate(segment_urls, start=1):
         segment_response = requests.get(segment_url, stream=True, timeout=30)
         if segment_response.status_code != 200:
             return None
         for chunk in segment_response.iter_content(chunk_size=1024 * 1024):
             if chunk:
                 buffer.write(chunk)
+        if progress_callback:
+            progress_callback(index / total_segments)
     return buffer.getvalue()
 
 
@@ -189,6 +199,9 @@ def download_with_ytdlp(
         with open(file_path, "rb") as downloaded_file:
             data = downloaded_file.read()
 
+        if not data:
+            return None, None
+
         return data, os.path.basename(file_path)
 
 
@@ -304,14 +317,10 @@ def add_log(message: str) -> None:
 # Поле для ввода URL
 url = st.text_input("Введите URL видео")
 
-# Опциональный режим для yt-dlp
+# Опциональный режим для yt-dlp (используется по умолчанию, если доступен)
 ytdlp_available = importlib.util.find_spec("yt_dlp") is not None
-use_ytdlp = st.checkbox(
-    "Использовать yt-dlp (YouTube и сложные сайты)",
-    disabled=not ytdlp_available,
-)
 if not ytdlp_available:
-    st.caption("yt-dlp не установлен. Установите пакет, чтобы включить этот режим.")
+    st.caption("yt-dlp не установлен. Будет использован прямой режим.")
 elif "youtube.com" in url or "youtu.be" in url:
     st.info(
         "Для YouTube можно использовать yt-dlp. При ограничениях доступа "
@@ -341,7 +350,7 @@ if st.button("Проверить ссылку"):
     else:
         try:
             add_log("Проверка ссылки: начинаем анализ URL.")
-            if use_ytdlp:
+            if ytdlp_available:
                 add_log("Проверка ссылки: используем yt-dlp.")
                 options, error_message = get_ytdlp_options(url)
             else:
@@ -402,6 +411,7 @@ if st.button("Скачать видео"):
                 add_log(
                     f"Скачивание: выбран формат {selected_option['label']}."
                 )
+                progress_bar = st.progress(0)
                 if selected_option["type"] == "ytdlp":
                     data, ytdlp_name = download_with_ytdlp(
                         selected_option["url"],
@@ -409,20 +419,30 @@ if st.button("Скачать видео"):
                         cookies_file.strip() or None,
                         allow_merge_streams,
                     )
+                    progress_bar.progress(1.0)
                     if ytdlp_name:
                         base_name = os.path.splitext(ytdlp_name)[0] or "video"
                     else:
                         base_name = "video"
                 elif selected_option["type"] == "hls":
-                    data = download_hls_playlist(selected_option["url"])
+                    data = download_hls_playlist(
+                        selected_option["url"],
+                        progress_callback=progress_bar.progress,
+                    )
                     base_name = None
                 else:
-                    data = download_file(selected_option["url"])
+                    data = download_file(
+                        selected_option["url"],
+                        progress_callback=progress_bar.progress,
+                    )
                     base_name = None
 
                 if data is None:
                     add_log("Скачивание: сервер вернул неуспешный статус.")
                     st.error("Не удалось скачать файл: сервер вернул неуспешный статус.")
+                elif not data:
+                    add_log("Скачивание: получен пустой файл.")
+                    st.error("Не удалось скачать файл: получен пустой файл.")
                 elif data.lstrip().lower().startswith((b"<!doctype html", b"<html")):
                     add_log("Скачивание: получена HTML-страница вместо видео.")
                     st.error(
