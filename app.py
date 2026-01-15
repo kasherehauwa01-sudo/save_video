@@ -166,8 +166,6 @@ def get_ytdlp_options(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
 def download_with_ytdlp(
     url: str,
     format_id: str,
-    cookies_path: Optional[str],
-    allow_merge: bool,
 ) -> tuple[Optional[bytes], Optional[str]]:
     """Скачивает файл через yt-dlp и возвращает байты и имя файла."""
     if importlib.util.find_spec("yt_dlp") is None:
@@ -175,34 +173,34 @@ def download_with_ytdlp(
 
     import yt_dlp
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_template = os.path.join(tmpdir, "%(title)s.%(ext)s")
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "outtmpl": output_template,
-            "format": format_id,
-            "merge_output_format": "mp4" if allow_merge else None,
-        }
-        if cookies_path:
-            ydl_opts["cookiefile"] = cookies_path
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            file_path = ydl.prepare_filename(info)
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_template = os.path.join(tmpdir, "%(title)s.%(ext)s")
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "outtmpl": output_template,
+                "format": format_id,
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                file_path = ydl.prepare_filename(info)
 
-        if not os.path.exists(file_path):
-            files = os.listdir(tmpdir)
-            if not files:
+            if not os.path.exists(file_path):
+                files = os.listdir(tmpdir)
+                if not files:
+                    return None, None
+                file_path = os.path.join(tmpdir, files[0])
+
+            with open(file_path, "rb") as downloaded_file:
+                data = downloaded_file.read()
+
+            if not data:
                 return None, None
-            file_path = os.path.join(tmpdir, files[0])
 
-        with open(file_path, "rb") as downloaded_file:
-            data = downloaded_file.read()
-
-        if not data:
-            return None, None
-
-        return data, os.path.basename(file_path)
+            return data, os.path.basename(file_path)
+    except Exception:  # noqa: BLE001
+        return None, None
 
 
 # Функция для анализа ссылки и поиска доступных форматов
@@ -327,18 +325,6 @@ elif "youtube.com" in url or "youtu.be" in url:
         "может понадобиться cookies-файл и объединение потоков через ffmpeg."
     )
 
-# Параметры для yt-dlp
-cookies_file = st.text_input(
-    "Путь к cookies-файлу (для yt-dlp, необязательно)",
-    placeholder="/path/to/cookies.txt",
-    disabled=not ytdlp_available,
-)
-allow_merge_streams = st.checkbox(
-    "Объединять видео и аудио (нужен ffmpeg)",
-    value=False,
-    disabled=not ytdlp_available,
-)
-
 # Кнопка для проверки доступных форматов
 if st.button("Проверить ссылку"):
     if not url:
@@ -416,8 +402,6 @@ if st.button("Скачать видео"):
                     data, ytdlp_name = download_with_ytdlp(
                         selected_option["url"],
                         selected_option.get("format_id", "best"),
-                        cookies_file.strip() or None,
-                        allow_merge_streams,
                     )
                     progress_bar.progress(1.0)
                     if ytdlp_name:
@@ -439,7 +423,12 @@ if st.button("Скачать видео"):
 
                 if data is None:
                     add_log("Скачивание: сервер вернул неуспешный статус.")
-                    st.error("Не удалось скачать файл: сервер вернул неуспешный статус.")
+                    if selected_option["type"] == "ytdlp":
+                        st.error("Не удалось скачать файл через yt-dlp.")
+                    else:
+                        st.error(
+                            "Не удалось скачать файл: сервер вернул неуспешный статус."
+                        )
                 elif not data:
                     add_log("Скачивание: получен пустой файл.")
                     st.error("Не удалось скачать файл: получен пустой файл.")
