@@ -153,7 +153,12 @@ def get_ytdlp_options(url: str) -> tuple[list[dict[str, str]], Optional[str]]:
 
 
 # Функция для скачивания через yt-dlp
-def download_with_ytdlp(url: str, format_id: str) -> tuple[Optional[bytes], Optional[str]]:
+def download_with_ytdlp(
+    url: str,
+    format_id: str,
+    cookies_path: Optional[str],
+    allow_merge: bool,
+) -> tuple[Optional[bytes], Optional[str]]:
     """Скачивает файл через yt-dlp и возвращает байты и имя файла."""
     if importlib.util.find_spec("yt_dlp") is None:
         return None, None
@@ -167,7 +172,10 @@ def download_with_ytdlp(url: str, format_id: str) -> tuple[Optional[bytes], Opti
             "no_warnings": True,
             "outtmpl": output_template,
             "format": format_id,
+            "merge_output_format": "mp4" if allow_merge else None,
         }
+        if cookies_path:
+            ydl_opts["cookiefile"] = cookies_path
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             file_path = ydl.prepare_filename(info)
@@ -297,7 +305,30 @@ def add_log(message: str) -> None:
 url = st.text_input("Введите URL видео")
 
 # Опциональный режим для yt-dlp
-use_ytdlp = st.checkbox("Использовать yt-dlp (YouTube и сложные сайты)")
+ytdlp_available = importlib.util.find_spec("yt_dlp") is not None
+use_ytdlp = st.checkbox(
+    "Использовать yt-dlp (YouTube и сложные сайты)",
+    disabled=not ytdlp_available,
+)
+if not ytdlp_available:
+    st.caption("yt-dlp не установлен. Установите пакет, чтобы включить этот режим.")
+elif "youtube.com" in url or "youtu.be" in url:
+    st.info(
+        "Для YouTube можно использовать yt-dlp. При ограничениях доступа "
+        "может понадобиться cookies-файл и объединение потоков через ffmpeg."
+    )
+
+# Параметры для yt-dlp
+cookies_file = st.text_input(
+    "Путь к cookies-файлу (для yt-dlp, необязательно)",
+    placeholder="/path/to/cookies.txt",
+    disabled=not ytdlp_available,
+)
+allow_merge_streams = st.checkbox(
+    "Объединять видео и аудио (нужен ffmpeg)",
+    value=False,
+    disabled=not ytdlp_available,
+)
 
 # Кнопка для проверки доступных форматов
 if st.button("Проверить ссылку"):
@@ -375,6 +406,8 @@ if st.button("Скачать видео"):
                     data, ytdlp_name = download_with_ytdlp(
                         selected_option["url"],
                         selected_option.get("format_id", "best"),
+                        cookies_file.strip() or None,
+                        allow_merge_streams,
                     )
                     if ytdlp_name:
                         base_name = os.path.splitext(ytdlp_name)[0] or "video"
