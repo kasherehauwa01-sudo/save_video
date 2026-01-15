@@ -340,32 +340,33 @@ elif "youtube.com" in url or "youtu.be" in url:
         "может понадобиться cookies-файл и объединение потоков через ffmpeg."
     )
 
-# Кнопка для проверки доступных форматов
-if st.button("Проверить ссылку"):
-    if not url:
-        add_log("Проверка ссылки: URL пустой.")
-        st.error("URL не должен быть пустым.")
-    elif not (url.startswith("http://") or url.startswith("https://")):
+# Автоматическая проверка ссылки при вводе
+if url and url != st.session_state.get("last_checked_url"):
+    if not (url.startswith("http://") or url.startswith("https://")):
         add_log("Проверка ссылки: неверный протокол.")
         st.warning("URL должен начинаться с http:// или https://")
     else:
         try:
             add_log("Проверка ссылки: начинаем анализ URL.")
-            if ytdlp_available:
-                add_log("Проверка ссылки: используем yt-dlp.")
-                options, error_message = get_ytdlp_options(url)
-            else:
-                options, error_message = inspect_url(url)
+            with st.spinner("Проверяем ссылку..."):
+                if ytdlp_available:
+                    add_log("Проверка ссылки: используем yt-dlp.")
+                    options, error_message = get_ytdlp_options(url)
+                else:
+                    options, error_message = inspect_url(url)
             if error_message:
                 add_log(f"Проверка ссылки: ошибка - {error_message}")
                 st.error(error_message)
+                st.session_state.pop("download_options", None)
             elif not options:
                 add_log("Проверка ссылки: варианты не найдены.")
                 st.error("Не удалось определить доступные форматы.")
+                st.session_state.pop("download_options", None)
             else:
                 st.session_state["download_options"] = options
                 add_log(f"Проверка ссылки: найдено вариантов - {len(options)}.")
                 st.success("Форматы определены. Выберите подходящий вариант.")
+                st.session_state["last_checked_url"] = url
         except requests.RequestException as exc:
             add_log(f"Проверка ссылки: ошибка запроса - {exc}")
             st.error(f"Ошибка при проверке ссылки: {exc}")
